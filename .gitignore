@@ -1,0 +1,20 @@
+# per-machine files, never part of the repository
+work/
+scripts/local.sh
+.env
+AGENTS.md
+# notes and scratch
+HANDOFF*.md
+*-PROMPT.md
+STATUS.md
+PLAN.md
+NOTES*.md
+*.bak
+*.orig
+*.rej
+*.log
+__pycache__/
+# Markdown other than the README and the license credits stays local (changelog, plans, results, handoffs)
+*.md
+!README.md
+!CREDITS.md
