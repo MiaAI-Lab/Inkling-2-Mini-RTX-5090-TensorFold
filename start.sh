@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 # Serve Inkling-2-Mini (default; RERISKED=1 serves the local Inkling-2-Mini-Derisked folder) with TensorFold's Zig engine on one DGX Spark: runs
 # scripts/prepare.sh when the image or the checkpoint check is not current, launches tensorfold-native serve on port
-# 8888 with the checkpoint's own DSpark drafter, waits until the OpenAI API answers, then runs a smoke test.
+# 8888 with the DFlash2 draft model (incoai/Inkling-2-Mini-DFlash2; DRAFTER=dspark: the checkpoint's own DSpark head),
+# waits until the OpenAI API answers, then runs a smoke test.
 # Stop it with ./stop.sh.
 #
 # Usage: ./start.sh [restart] [extra tensorfold-native serve args]
-#   ./start.sh                         # up to 4 requests at once, a 262,144-token window, DSpark drafts
+#   ./start.sh                         # up to 8 requests at once, a 262,144-token window, DFlash2 drafts
 #   ./start.sh restart                 # stop, then start again; the new arguments are checked before stopping
 #   ./start.sh restart --parallel 2 --context 131072
 #   CONTEXT=131072 ./start.sh restart  # a shorter window leaves memory for more streams or the prompt cache
 #   DRAFTS=0 ./start.sh restart        # no drafter (--no-drafts)
+#   DRAFTER=dspark ./start.sh restart  # the checkpoint's own DSpark head instead of DFlash2
 #   DRY_RUN=1 ./start.sh               # print the docker command and exit
 # Extra arguments go to tensorfold-native serve after the defaults, so they win.
 # Settings, from the environment or ./.env (scripts/config.sh):
-#   serving  CONTEXT, PARALLEL, MAX_TOKENS, THINKING, REASONING_EFFORT, DRAFTS, TEMPERATURE, TOP_P, TOP_K, SERVED_NAME, HOST, PORT
-#   files    MODEL_DIR, KERNEL_CACHE, STATE_DIR
+#   serving  CONTEXT, PARALLEL, MAX_TOKENS, THINKING, REASONING_EFFORT, DRAFTS, DRAFTER, TEMPERATURE, TOP_P, TOP_K, SERVED_NAME, HOST, PORT
+#   files    MODEL_DIR, DRAFTER_DIR, KERNEL_CACHE, STATE_DIR
 #   image    IMAGE, TF_REPO, TF_REF, ZIG_VERSION, BASE_IMAGE, CONTAINER_NAME
 #   setup    PREPARE (auto | 1 | 0), FOREGROUND=1, WAIT_TIMEOUT, DRY_RUN=1, MEM_NEED_GIB, MEM_CHECK=0
 #   engine   every TENSORFOLD_* and TF_INKLING2_* variable goes into the container (TENSORFOLD_API_KEY by name only)
@@ -44,7 +46,9 @@ SERVE_ARGS=(--context "$CONTEXT" --parallel "$PARALLEL" --max-tokens "$MAX_TOKEN
             --temperature "$TEMPERATURE" --top-p "$TOP_P" --top-k "$TOP_K")
 if [[ "$THINKING" == 1 ]]; then SERVE_ARGS+=(--thinking); else SERVE_ARGS+=(--no-thinking); fi
 [[ -z "$REASONING_EFFORT" ]] || SERVE_ARGS+=(--reasoning-effort "$REASONING_EFFORT")
-if [[ "$DRAFTS" == 1 ]]; then SERVE_ARGS+=(--drafter "$MODEL_MOUNT"); else SERVE_ARGS+=(--no-drafts); fi
+if [[ "$DRAFTS" != 1 ]]; then SERVE_ARGS+=(--no-drafts)
+elif [[ "$DRAFTER" == dflash2 ]]; then SERVE_ARGS+=(--drafter "$DRAFTER_MOUNT")
+else SERVE_ARGS+=(--drafter "$MODEL_MOUNT"); fi
 if [[ "$VISION" == 1 ]]; then
   SERVE_ARGS+=(--vision)
   [[ "$VISION_URLS" == 1 ]] && SERVE_ARGS+=(--vision-urls)
@@ -82,7 +86,7 @@ echo
 banner
 printf '\n%s  Mia'"'"'s TensorFold Start Script%s\n' "$M" "$R"
 printf '%s  %s · GPU %s · %s at once · %s-token window · %s KV · drafts %s · port %s%s\n\n' "$D" "$MODEL_LABEL" "$GPU_ID" \
-  "$(arg_value --parallel)" "$(arg_value --context)" "$KV_DTYPE" "$( [[ "$DRAFTS" == 1 ]] && echo DSpark || echo off)" "$PORT" "$R"
+  "$(arg_value --parallel)" "$(arg_value --context)" "$KV_DTYPE" "$(drafts_label)" "$PORT" "$R"
 STEPS=5
 step() { printf '%s[%s/%s]%s %s%s%s\n' "$M" "$1" "$STEPS" "$R" "$B" "$2" "$R"; }
 
@@ -120,6 +124,12 @@ fi
 KCACHE=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$IMAGE" 2>/dev/null || true)
 [[ "$KCACHE" =~ ^[0-9a-f]{12}$ ]] || KCACHE=$(image_hash)
 [[ -f "$MODEL_DIR/config.json" && -f "$MODEL_DIR/$MTP_NAME" ]] || missing "$MODEL_DIR holds no Inkling-2-Mini checkpoint (config.json, $MTP_NAME): set MODEL_DIR"
+DRAFT_MOUNT=()
+if [[ "$DFLASH2" == 1 ]]; then
+  [[ -f "$DRAFTER_DIR/config.json" && -f "$DRAFTER_DIR/$DRAFTER_NAME" ]] ||
+    missing "$DRAFTER_DIR holds no DFlash2 draft model (config.json, $DRAFTER_NAME): scripts/fetch.sh drafter, set DRAFTER_DIR, or DRAFTER=dspark"
+  DRAFT_MOUNT=(-v "$DRAFTER_DIR":"$DRAFTER_MOUNT":ro)
+fi
 
 step 2 "Checks: arguments, previous server, port, memory"
 if (( have_image )); then
@@ -176,6 +186,7 @@ here_cmd=(docker run -d --name "$CONTAINER_NAME"
           --ulimit memlock=-1 --ulimit stack=67108864
           ${ENV_ARGS[@]+"${ENV_ARGS[@]}"} ${KEY_ARGS[@]+"${KEY_ARGS[@]}"}
           -v "$MODEL_DIR":"$MODEL_MOUNT":ro
+          ${DRAFT_MOUNT[@]+"${DRAFT_MOUNT[@]}"}
           -v "$KERNEL_CACHE/$KCACHE":/cache
           "$IMAGE"
           tensorfold-native serve "$MODEL_MOUNT" --name "$SERVED_NAME" --host "$HOST" --port "$PORT"
@@ -192,7 +203,7 @@ if [[ "${FOREGROUND:-0}" == 1 ]]; then
   exit "$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME" 2>/dev/null || echo 1)"
 fi
 
-step 4 "Loading: ~$WEIGHTS_GIB GiB of weights and the DSpark drafter"
+step 4 "Loading: ~$WEIGHTS_GIB GiB of weights and the $(drafts_label) drafter"
 NOISE='^\s*$|^=+$|^== PyTorch ==|^NVIDIA Release|Copyright|All rights reserved|PyTorch Version|Various files include|NOTE: CUDA Forward|Using CUDA|cuda-compatibility|Container image|^\[tensorfold\] [^ ]+ "GET /(health|v1/models|models|metrics|stats|slots)[ ?]'
 docker logs -f "$CONTAINER_NAME" > >(grep --line-buffered -v -E "$NOISE" | sed -u "s/^/  ${D}│${R} /") 2>&1 &
 LOGS_PID=$!
@@ -261,7 +272,7 @@ cat <<EOF
     GPU      GPU $GPU_ID (sm_$SM) · ${avail_gb} GiB VRAM was free
     Loaded   in ${LOADED_S}s
     Model    $MODEL_DIR ($QUANT_LABEL)
-    Window   $(arg_value --context) tokens · $(arg_value --parallel) at once · $KV_DTYPE KV · drafts $( [[ "$DRAFTS" == 1 ]] && echo DSpark || echo off)
+    Window   $(arg_value --context) tokens · $(arg_value --parallel) at once · $KV_DTYPE KV · drafts $(drafts_label)
     Logs     docker logs -f $CONTAINER_NAME
     Restart  ./start.sh restart
     Stop     ./stop.sh

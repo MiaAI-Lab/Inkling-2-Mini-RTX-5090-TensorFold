@@ -174,6 +174,10 @@ if [[ "${MODEL_FETCH:-0}" == 1 ]] && ! [[ -s "$MODEL_DIR/$SHARD_NAME" && -s "$MO
   log "$MODEL_LABEL is not complete in $MODEL_DIR: fetching it (about 20 GB, resumable)"
   ./scripts/fetch.sh "$MODEL_DIR"
 fi
+if [[ "$DFLASH2" == 1 && "${DRAFTER_FETCH:-0}" == 1 ]] && ! [[ -s "$DRAFTER_DIR/$DRAFTER_NAME" && -s "$DRAFTER_DIR/config.json" ]]; then
+  log "The DFlash2 draft model is not complete in $DRAFTER_DIR: fetching it (about 1 GB, resumable)"
+  ./scripts/fetch.sh drafter "$DRAFTER_DIR"
+fi
 log "Verifying the checkpoint at $MODEL_DIR ($MODEL_LABEL)"
 [[ -d "$MODEL_DIR" ]] || die "MODEL_DIR=$MODEL_DIR is not a directory: point it at the $MODEL_LABEL folder"
 CHECK_PY='
@@ -202,6 +206,14 @@ log "Checkpoint OK: $info"
 for f in "$SHARD_NAME" "$MTP_NAME"; do
   [[ -s "$MODEL_DIR/$f" ]] || die "$MODEL_DIR/$f is missing or empty"
 done
+if [[ "$DFLASH2" == 1 ]]; then
+  [[ -s "$DRAFTER_DIR/$DRAFTER_NAME" && -s "$DRAFTER_DIR/config.json" ]] ||
+    die "$DRAFTER_DIR holds no DFlash2 draft model (config.json, $DRAFTER_NAME): scripts/fetch.sh drafter, set DRAFTER_DIR, or DRAFTER=dspark"
+  python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); d=c.get("dflash_config") or sys.exit("no dflash_config");
+sys.exit(0 if d.get("target_layer_ids")==[5,23,41,48] and d.get("block_size")==8 else "not the Inkling-2-Mini DFlash2 draft")' "$DRAFTER_DIR/config.json" ||
+    die "$DRAFTER_DIR/config.json is not incoai/Inkling-2-Mini-DFlash2's"
+  log "DFlash2 draft OK: $DRAFTER_DIR ($DRAFTER_REPO@${DRAFTER_REV:0:12})"
+fi
 stamp=$(weights_stamp)
 if [[ $REHASH -eq 0 && "$(cat "$VERIFIED_MARKER" 2>/dev/null)" == "$stamp" ]]; then
   log "SHA-256 already verified for these files (same size and mtime; --rehash checks again)"
@@ -211,8 +223,12 @@ else
   [[ "$got" == "$SHARD_SHA256" ]] || die "$SHARD_NAME SHA-256 is $got, not $SHARD_SHA256 (pinned for $MODEL_LABEL): not this checkpoint"
   got=$(sha256sum "$MODEL_DIR/$MTP_NAME" | cut -d' ' -f1)
   [[ "$got" == "$MTP_SHA256" ]] || die "$MTP_NAME SHA-256 is $got, not $MTP_SHA256 (the upstream MTP module's)"
+  if [[ "$DFLASH2" == 1 ]]; then
+    got=$(sha256sum "$DRAFTER_DIR/$DRAFTER_NAME" | cut -d' ' -f1)
+    [[ "$got" == "$DRAFTER_SHA256" ]] || die "$DRAFTER_DIR/$DRAFTER_NAME SHA-256 is $got, not $DRAFTER_SHA256 ($DRAFTER_REPO@${DRAFTER_REV:0:12})"
+  fi
   printf '%s' "$stamp" > "$VERIFIED_MARKER"
-  log "SHA-256 OK: target shard ${SHARD_SHA256:0:12}, MTP ${MTP_SHA256:0:12}"
+  log "SHA-256 OK: target shard ${SHARD_SHA256:0:12}, MTP ${MTP_SHA256:0:12}$( [[ "$DFLASH2" == 1 ]] && echo ", DFlash2 ${DRAFTER_SHA256:0:12}")"
 fi
 prepared_state > "$PREPARED_MARKER"
 log "Done. Start the server with ./start.sh (port $PORT)."
