@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Serve Inkling-2-Mini (default; RERISKED=1 serves the local Inkling-2-Mini-Derisked folder) with TensorFold's Zig engine on one DGX Spark: runs
+# Serve Inkling-2-Mini (default; RERISKED=1 serves the local Inkling-2-Mini-Derisked folder) with TensorFold's Zig engine on one RTX 5090: runs
 # scripts/prepare.sh when the image or the checkpoint check is not current, launches tensorfold-native serve on port
 # 8888 with the DFlash2 draft model (incoai/Inkling-2-Mini-DFlash2; DRAFTER=dspark: the checkpoint's own DSpark head),
 # waits until the OpenAI API answers, then runs a smoke test.
 # Stop it with ./stop.sh.
 #
 # Usage: ./start.sh [restart] [extra tensorfold-native serve args]
-#   ./start.sh                         # up to 8 requests at once, a 262,144-token window, DFlash2 drafts
+#   ./start.sh                         # 1 request at a time, a 262,144-token window, fp8 KV, DFlash2 drafts
 #   ./start.sh restart                 # stop, then start again; the new arguments are checked before stopping
 #   ./start.sh restart --parallel 2 --context 131072
-#   CONTEXT=131072 ./start.sh restart  # a shorter window leaves memory for more streams or the prompt cache
+#   CONTEXT=65536 PARALLEL=4 ./start.sh restart  # a shorter window leaves memory for more streams or the prompt cache
 #   DRAFTS=0 ./start.sh restart        # no drafter (--no-drafts)
 #   DRAFTER=dspark ./start.sh restart  # the checkpoint's own DSpark head instead of DFlash2
 #   DRY_RUN=1 ./start.sh               # print the docker command and exit
@@ -18,7 +18,7 @@
 #   serving  CONTEXT, PARALLEL, MAX_TOKENS, THINKING, REASONING_EFFORT, DRAFTS, DRAFTER, TEMPERATURE, TOP_P, TOP_K, SERVED_NAME, HOST, PORT
 #   files    MODEL_DIR, DRAFTER_DIR, KERNEL_CACHE, STATE_DIR
 #   image    IMAGE, TF_REPO, TF_REF, ZIG_VERSION, BASE_IMAGE, CONTAINER_NAME
-#   setup    PREPARE (auto | 1 | 0), FOREGROUND=1, WAIT_TIMEOUT, DRY_RUN=1, MEM_NEED_GIB, MEM_CHECK=0
+#   setup    PREPARE (auto | 1 | 0), FOREGROUND=1, WAIT_TIMEOUT, DRY_RUN=1, MEM_NEED_GIB, MEM_SLACK_GIB, MEM_CHECK=0
 #   engine   every TENSORFOLD_* and TF_INKLING2_* variable goes into the container (TENSORFOLD_API_KEY by name only)
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
@@ -160,7 +160,7 @@ if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q LISTEN; then
   if (( DRY )); then log "DRY_RUN: port $PORT is in use"
   else die "port $PORT is already in use: $(ss -ltnp "sport = :$PORT" 2>/dev/null | tail -n +2)"; fi
 fi
-need_gib=${MEM_NEED_GIB:-$(mem_need_gib "$(arg_value --context)")}
+need_gib=${MEM_NEED_GIB:-$(mem_need_gib "$(arg_value --context)" "$(arg_value --parallel)")}
 host_avail_gb=$(awk '/^MemAvailable:/ {print int($2 / 1048576)}' /proc/meminfo)
 gpu_free_mib=$(nvidia-smi -i "$GPU_ID" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -dc '0-9')
 [[ -n "$gpu_free_mib" ]] || die "cannot query free VRAM on GPU $GPU_ID via nvidia-smi"

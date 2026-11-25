@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare this Spark to serve Inkling-2-Mini (default) or, with RERISKED=1, Inkling-2-Mini-Derisked with TensorFold's Zig engine (tensorfold-native, one GPU):
+# Prepare this machine (one RTX 5090) to serve Inkling-2-Mini (default) or, with RERISKED=1, Inkling-2-Mini-Derisked with TensorFold's Zig engine (tensorfold-native, one GPU):
 #   1. preflight: docker, the GPU, memory, disk
 #   2. the image: tensorfold-native built from TensorFold (TF_REPO at TF_REF, PR #4441's Inkling 2 Mini CUDA engine) plus
 #      patches/*.patch with Zig, on NVIDIA's PyTorch container (kernels are embedded in the binary), with libtfgrammar.so

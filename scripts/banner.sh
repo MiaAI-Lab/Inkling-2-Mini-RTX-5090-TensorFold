@@ -10,6 +10,6 @@ banner() {
   ██║██║ ╚████║██║  ██╗███████╗██║██║ ╚████║╚██████╔╝
   ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝
 ART
-  printf '%s  %s · TensorFold · RTX PRO 6000 (GPU %s)%s\n' "$d" "${MODEL_LABEL:-Inkling-2-Mini}" "${GPU_ID:-0}" "$r"
+  printf '%s  %s · TensorFold · %s (GPU %s)%s\n' "$d" "${MODEL_LABEL:-Inkling-2-Mini}" "${GPU_LABEL:-RTX 5090}" "${GPU_ID:-0}" "$r"
   printf '%s  M I A   A I   L A B%s\n' "$m" "$r"
 }

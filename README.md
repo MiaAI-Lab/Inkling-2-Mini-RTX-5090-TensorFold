@@ -1,4 +1,4 @@
-<h1 align="center">Inkling 2 Mini on RTX PRO 6000 (TensorFold)</h1>
+<h1 align="center">Inkling 2 Mini on RTX 5090 (TensorFold)</h1>
 
 <p align="center">
   <sub>by <a href="https://x.com/MiaAI_lab">Mia's AI Lab</a></sub>
@@ -7,65 +7,47 @@
   <a href="https://x.com/MiaAI_lab" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:0 8px;vertical-align:middle;"><img src="https://img.shields.io/badge/Follow%20me%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow Mia on X" height="28" style="height:28px;width:auto;vertical-align:middle;border:0;" /></a>
 </p>
 
-<p align="center">
-  <img src=".github/rtx.webp" alt="Inkling 2 Mini on RTX PRO 6000 (TensorFold)" width="100%" />
-</p>
-
-Serve **[Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)** on a single **NVIDIA RTX PRO 6000 Blackwell** (96 GiB VRAM, `sm_120`, GPU 0 by default) through an OpenAI- and Anthropic-compatible API. It runs [TensorFold](https://github.com/ashhart/TensorFold)'s Zig engine (`tensorfold-native`, Jürgen Schmied's Inkling 2 Mini CUDA engine at [PR #4441](https://github.com/ashhart/TensorFold/pull/4441), commit `dc2ca8a1`) plus `patches/0001`–`0018` in a slim `nvidia/cuda:13.3.1-runtime-ubuntu24.04` container, with native CUDA multimodal vision (`inkling2_vision`: PNG, JPEG, WebP) and structured output / tool calling (`libtfgrammar.so`).
+Serve **[Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)** on a single **NVIDIA GeForce RTX 5090** (32 GiB GDDR7, `sm_120`, GPU 0 by default) through an OpenAI- and Anthropic-compatible API. It runs [TensorFold](https://github.com/ashhart/TensorFold)'s Zig engine (`tensorfold-native`, Jürgen Schmied's Inkling 2 Mini CUDA engine at [PR #4441](https://github.com/ashhart/TensorFold/pull/4441), commit `dc2ca8a1`) plus `patches/0001`–`0018` in a slim `nvidia/cuda:13.3.1-runtime-ubuntu24.04` container, with native CUDA multimodal vision (`inkling2_vision`: PNG, JPEG, WebP) and structured output / tool calling (`libtfgrammar.so`).
 
 - **Model:** 26.4B total / 3.4B active (~5.4B effective) looped MoE (24 physical layers, middle 12 looped 3× = 48 visits; 8 of 128 experts; 40 sliding 1,024-token + 8 full-attention visits) + 23-layer `inkling2_vision` ViT encoder (`0.59 GiB` bf16). NVIDIA ModelOpt checkpoint: NVFP4 experts (layers 0–19), MXFP8 (20–23), bf16 MTP DSpark drafter (`mtp.safetensors`, `DRAFTER=dspark`).
 - **Default drafter:** [`incoai/Inkling-2-Mini-DFlash2`](https://huggingface.co/incoai/Inkling-2-Mini-DFlash2), a DFlash 2 block-diffusion draft model (5 layers, 0.49B parameters, Apache-2.0), pinned at revision `4f9088ea`, fetched into `$HOME/models/hf/Inkling-2-Mini-DFlash2` by `scripts/fetch.sh drafter` (~1 GB) and SHA-256 verified. One pass drafts a block of 7 tokens from the target's visits 5, 23, 41 and the final norm; patch `0018` runs it natively in the engine (`--drafter /models/draft`), and the target verifies every draft, so replies are unchanged.
 - **Default checkpoint:** upstream `thinkingmachines/Inkling-2-Mini` (pinned rev `7a67ae23`, auto-downloaded into `$HOME/models/hf/Inkling-2-Mini` by `scripts/fetch.sh` and SHA-256 verified). Set `RERISKED=1` to serve a local [`Inkling-2-Mini-Derisked`](https://huggingface.co/Blackfrost-AI/Inkling-2-Mini-Derisked) folder instead (never downloaded automatically; behaviorally modified derivative with most safety refusals removed—treat its output as untrusted data). Blackfrost's [deployment kit](https://huggingface.co/Blackfrost-AI/Inkling-2-Mini-Derisked/blob/main/deployment-kit/AGENT_INSTRUCTIONS.md) only ships for vLLM; MiaAI-Lab built full TensorFold parity for it (matching vLLM's `reasoning_effort`, `reasoning` output field, SHA-256 checks, and readiness gate).
-- **Default serving config:** GPU `0`, **262,144** context per stream (model limit 1,048,576), **8** concurrent streams (`~2.1M` active KV tokens + `16 GiB` prompt cache), `fp8` KV cache, DFlash2 drafter (`DRAFTS=1`, `DRAFTER=dflash2`), native CUDA vision (`VISION=1`), structured output / `tool_choice` (`libtfgrammar.so`), and Blackwell native FP4/MXFP8 prefill tensor cores (`TF_INKLING2_PREFILL_TC=1`).
+- **Default serving config:** GPU `0`, **262,144** (256k) context, **1** stream at a time (`262,144` active KV tokens + a few GiB of prompt cache), `fp8` KV cache, DFlash2 drafter (`DRAFTS=1`, `DRAFTER=dflash2`), native CUDA vision (`VISION=1`), structured output / `tool_choice` (`libtfgrammar.so`), and Blackwell native FP4/MXFP8 prefill tensor cores (`TF_INKLING2_PREFILL_TC=1`).
 - **One command:** `./start.sh` downloads weights, builds the `sm_120` image on first run, and starts the server; `./stop.sh` stops it.
+- **Port of the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/Inkling-2-Mini-RTX-PRO-6000-TensorFold):** same engine, patches and image (the 5090 is also `sm_120`, with 170 SMs and the same 1,792 GB/s). Only the VRAM budget changes: 32 GiB instead of 96 GiB, so fewer and shorter KV windows and a 1 GiB reserve.
 
 ## Performance
 
-Measured with [sparkDash](https://github.com/MiaAI-Lab/sparkDash/) on a single **NVIDIA RTX PRO 6000 Blackwell Workstation Edition** (`sm_120`, `Inkling-2-Mini`, `CONTEXT=262144`, `PARALLEL=8`, `KV_DTYPE=fp8`, `DRAFTS=1` DSpark, `TF_INKLING2_ATTN_FP8=1`, `TF_INKLING2_PREFILL_TC=1`). Decode numbers below are at **300 W** (Max-Q); prefill is shown at both **300 W** and **600 W**.
+Not measured on an RTX 5090 yet. Until then, the single-stream reference from the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/Inkling-2-Mini-RTX-PRO-6000-TensorFold#performance): same engine and patches, `sm_120`, the same 1,792 GB/s memory bandwidth, and 188 SMs to the 5090's 170, so the 5090 should land close.
 
-### Prefill (300 W vs 600 W)
+### Decode — 1 stream, RTX PRO 6000 reference (300 W · `temp 0.7` · thinking on · `top_k 20` · DSpark drafts)
 
-| Context | 300 W tok/s | 300 W TTFT | 600 W tok/s | 600 W TTFT |
+| Streams | Prose | Prose TTFT | Code | Code TTFT |
 | --- | ---: | ---: | ---: | ---: |
-| 4k | **12,018.7 tok/s** | 392 ms | **19,478.4 tok/s** | 261 ms |
-| 8k | **11,340.5 tok/s** | 774 ms | **18,649.8 tok/s** | 491 ms |
-| 16k | **10,931.5 tok/s** | 1.55 s | **17,804.6 tok/s** | 971 ms |
-| 32k | **10,244.5 tok/s** | 3.25 s | **16,446.1 tok/s** | 2.04 s |
-| 64k | **9,023.8 tok/s** | 7.31 s | **14,307.1 tok/s** | 4.63 s |
-| 128k | **7,357.6 tok/s** | 17.87 s | **11,338.0 tok/s** | 11.61 s |
+| ×1 | **150.7 tok/s** | 23 ms | **231.1 tok/s** | 53 ms |
 
-> **DFlash2:** the tables below were measured with the DSpark drafter. DFlash2 (now the default) hasn't been benchmarked on the RTX PRO 6000 yet. On a DGX Spark, with the same engine and settings and only the drafter changed, it decoded 13–37% faster at one stream and 20–25% faster at 4 and 8 streams (`temperature 0.7`, thinking on). See the [DGX Spark recipe](https://github.com/MiaAI-Lab/Inkling-2-Mini-DGX-Spark-TensorFold#performance).
-
-### Decode — 300 W (`temp 0.7` · thinking on · `top_k 20` · DSpark drafts)
-
-| Streams | Prose agg | Prose / stream | Prose TTFT | Code agg | Code / stream | Code TTFT |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| ×1 | **150.7 tok/s** | 150.7 tok/s | 23 ms | **231.1 tok/s** | 231.1 tok/s | 53 ms |
-| ×2 | **209.6 tok/s** | 110.1 tok/s | 44 ms | **367.6 tok/s** | 194.4 tok/s | 72 ms |
-| ×4 | **313.3 tok/s** | 83.5 tok/s | 62 ms | **429.8 tok/s** | 116.5 tok/s | 125 ms |
-| ×8 | **471.6 tok/s** | 63.7 tok/s | 113 ms | **652.5 tok/s** | 91.9 tok/s | 234 ms |
+> **DFlash2** (this recipe's default drafter) hasn't been benchmarked on either card. On a DGX Spark, with only the drafter changed, it decoded 13–37% faster than DSpark at one stream.
 
 ## Checks
 
-All checks passed on GPU 0 (`Inkling-2-Mini`, `CONTEXT=262144`, `PARALLEL=8`, `KV_DTYPE=fp8`, `DRAFTS=1` with DSpark, patches `0001`–`0017`). Patch `0018` (DFlash2) compiles for `sm_120` on this patch stack; its checks (`exact.py` at pads 0, 3k and 24k, prompt reuse, the 200k needle, structured output 10/10, vision) passed on a DGX Spark and haven't been re-run on the RTX PRO 6000 yet:
+Not yet run on an RTX 5090. The same patch stack passed every check on the RTX PRO 6000 (`sm_120`) and on a DGX Spark (`0018`, DFlash2). Run them after the first start:
 
-- `tools/exact.py`: **PASS** (all 6 prompts match across serial drafted, `"draft": false`, and 6-way concurrent; 508 drafts accepted)
-- `tools/prompt_reuse.py`: **PASS** (99.4%–99.5% prompt cache reuse across 4 follow-up turns at 32k; 0.06–0.07 s warm prefill)
-- 200k-token Needle in a Haystack (`199,951` prompt tokens, `max_tokens=512`): **PASS** (`warm-library-4557` retrieved; 32.83 s cold prefill)
-- Structured output & `tool_choice` (`json_schema`, `json_object`, `guided_regex`, `guided_choice`, `required`, named function): **PASS** (0 HTTP 500s, valid JSON / tool calls across greedy and sampled draws)
-- Multimodal vision (`VISION=1`): **PASS** (PNG, RGBA checkerboard alpha, multi-image, WebP, JPEG, vision + `json_schema`, and multi-turn image prefix cache reuse)
+- `tools/exact.py`: drafted, `"draft": false` and concurrent greedy replies must match bit-for-bit
+- `tools/prompt_reuse.py`: multi-turn prompt cache reuse
+- `tools/needle.py`: 200k-token Needle in a Haystack (fits the default 262,144-token window)
+- Structured output & `tool_choice`, and multimodal vision (`VISION=1`)
 
 ## Requirements
 
-- An **NVIDIA RTX PRO 6000 Blackwell** (96 GiB VRAM, `sm_120`, x86_64 Linux) with current NVIDIA drivers (CUDA 13+). Other Blackwell GPUs (`sm_120`/`sm_121`) work by adjusting `SM`, `PARALLEL`, and `CONTEXT`.
+- An **NVIDIA GeForce RTX 5090** (32 GiB VRAM, `sm_120`, x86_64 Linux) with current NVIDIA drivers (CUDA 13+). A dedicated (headless) card is best: a desktop on the same GPU takes VRAM, so raise `TENSORFOLD_MEMORY_RESERVE_GIB` or shorten `CONTEXT`. Other Blackwell GPUs (`sm_120`/`sm_121`) work by adjusting `SM`, `PARALLEL`, `CONTEXT`, and `TENSORFOLD_MEMORY_RESERVE_GIB`.
 - Docker with the NVIDIA Container Toolkit, and your user in the `docker` group.
 - ~15 GB free under Docker's root for the slim CUDA image, plus ~20 GB for the model checkpoint.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/MiaAI-Lab/Inkling-2-Mini-RTX-PRO-6000-TensorFold.git
-cd Inkling-2-Mini-RTX-PRO-6000-TensorFold
+git clone https://github.com/MiaAI-Lab/Inkling-2-Mini-RTX-5090-TensorFold.git
+cd Inkling-2-Mini-RTX-5090-TensorFold
 ./start.sh
 ```
 
@@ -83,6 +65,8 @@ curl -s http://<host-address>:8888/v1/chat/completions -H 'Content-Type: applica
 
 ```bash
 ./start.sh restart                  # restart (validates args before stopping)
+PARALLEL=2 CONTEXT=131072 ./start.sh restart   # two 128k windows
+PARALLEL=4 CONTEXT=65536 ./start.sh restart    # four 64k windows
 RERISKED=1 ./start.sh restart       # serve local Inkling-2-Mini-Derisked folder
 GPU_ID=1 ./start.sh restart         # pin to another GPU
 ./stop.sh                           # stop container and free VRAM
@@ -94,14 +78,14 @@ curl -s http://<host-address>:8888/health
 
 ## KV cache & VRAM budget
 
-On a 96 GiB RTX PRO 6000 with defaults (`CONTEXT=262144`, `PARALLEL=8`, `KV_DTYPE=fp8`, `DRAFTS=1`, `TENSORFOLD_MEMORY_RESERVE_GIB=4`):
+On a 32 GiB RTX 5090 with defaults (`CONTEXT=262144`, `PARALLEL=1`, `KV_DTYPE=fp8`, `DRAFTS=1`, `DRAFTER=dflash2`, `TENSORFOLD_MEMORY_RESERVE_GIB=1`). Weights were measured on the RTX PRO 6000 (same `sm_120` build); the rest is computed:
 
 - **Weights & scratch:** ~19.9 GiB (`17.60 GiB` target + `1.67 GiB` DFlash2 + `0.59 GiB` vision + scratch)
-- **Active KV slots:** **36.7 GiB** (`4.59 GiB`/stream × 8 streams = **2,097,152 active tokens**, `fp8` target KV + DFlash2's fixed 40 MiB ring a stream)
-- **Prompt cache pool:** what's left after the `4.0 GiB` VRAM reserve, about 8 GiB more than with DSpark (DGX Spark measurement; not yet measured here)
-- **`DRAFTER=dspark`:** `1.54 GiB` of drafter weights, `5.56 GiB` a stream (DSpark's global layer keeps a bf16 K/V row a position), a 16.0 GiB prompt cache, ~60.5 GiB of KV memory in all
+- **Active KV slots:** **~4.6 GiB** (1 stream × 262,144 tokens = **262,144 active tokens**, `fp8` target KV + DFlash2's fixed 40 MiB ring a stream)
+- **Prompt cache pool:** what's left after the `1 GiB` VRAM reserve, roughly 5 GiB on a headless card
+- **`DRAFTER=dspark`:** about the same weights (`1.54 GiB`), but its global layer adds a bf16 K/V row a position (`~1 GiB` more at 262,144)
 
-Every stream reserves its full `CONTEXT` window at startup. Set `KV_DTYPE=bf16` (with e.g. `PARALLEL=4`) for exact bf16 KV caches; `TF_INKLING2_ATTN_FP8=0` for exact bf16 attention projections; `TF_INKLING2_PREFILL_TC=0` for exact bf16 prefill experts.
+Every stream reserves its full `CONTEXT` window at startup, so `PARALLEL × CONTEXT` is the knob. At `fp8` KV each 65,536 tokens of window costs ~1.15 GiB, and about 10 GiB is free after the weights. Shapes that fit: `1 × 262144` (default), `2 × 131072`, `4 × 65536`, `8 × 32768`. `./start.sh` adds up weights, windows, `MEM_SLACK_GIB` (2) and the reserve, and refuses a shape that won't fit before it stops anything (`MEM_CHECK=0` starts anyway). `KV_DTYPE=bf16` doubles the window cost (e.g. `KV_DTYPE=bf16 PARALLEL=1 CONTEXT=65536`); `TF_INKLING2_ATTN_FP8=0` for exact bf16 attention projections; `TF_INKLING2_PREFILL_TC=0` for exact bf16 prefill experts.
 
 ## Configuration
 
@@ -110,10 +94,11 @@ All defaults live in [`scripts/config.sh`](scripts/config.sh). Override via envi
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `GPU_ID` | `0` | single GPU index passed to `--gpus device=$GPU_ID` |
-| `SM` | `120` | CUDA SASS target (`120` for RTX PRO 6000 Blackwell; `121` for GB10) |
+| `SM` | `120` | CUDA SASS target (`120` for RTX 5090 / RTX PRO 6000 Blackwell; `121` for GB10) |
+| `GPU_LABEL` | `RTX 5090` | GPU name shown in the start banner |
 | `RERISKED` | `0` | `0`: upstream `Inkling-2-Mini` (auto-fetched); `1`: local `Inkling-2-Mini-Derisked` |
 | `MODEL_DIR` | `$HOME/models/hf/Inkling-2-Mini` | checkpoint folder mounted read-only at `/models/ink` |
-| `PARALLEL` | `8` | concurrent request slots (each gets a full `CONTEXT` window) |
+| `PARALLEL` | `1` | concurrent request slots (each gets a full `CONTEXT` window) |
 | `CONTEXT` | `262144` | prompt + reply window per stream (up to `1048576`) |
 | `KV_DTYPE` | `fp8` | target KV cache format: `fp8` (default) or `bf16` (exact) |
 | `DRAFTS` | `1` | `1`: draft with `DRAFTER`; `0`: `--no-drafts` |
@@ -125,7 +110,8 @@ All defaults live in [`scripts/config.sh`](scripts/config.sh). Override via envi
 | `TEMPERATURE` / `TOP_P` / `TOP_K` | `1.0` / `1.0` / `0` | default sampling (per-request values override) |
 | `MAX_TOKENS` | `32768` | default reply budget when a request omits `max_tokens` |
 | `PORT` / `HOST` | `8888` / `0.0.0.0` | API listen address |
-| `TENSORFOLD_MEMORY_RESERVE_GIB` | `4` | VRAM kept free when sizing the KV / prompt-cache pool |
+| `TENSORFOLD_MEMORY_RESERVE_GIB` | `1` | VRAM kept free when sizing the KV / prompt-cache pool (raise it if the GPU also drives a display) |
+| `MEM_SLACK_GIB` | `2` | extra VRAM `./start.sh` requires beyond weights, windows and the reserve |
 | `TF_INKLING2_ATTN_FP8` | `1` | FP8 attention projections (`0` for exact bf16) |
 | `TF_INKLING2_PREFILL_TC` | `1` | Blackwell native FP4/MXFP8 prefill tensor cores (`0` for exact bf16 MMA) |
 
@@ -148,7 +134,7 @@ Applied in order onto TensorFold `dc2ca8a1` (`PR #4441`) by `scripts/prepare.sh`
 | `0001`–`0004` | Drafted verify windows with exact conv rollback & taps; CUDA DSpark drafter (`mtp.safetensors`); `--kv-cache fp8`; Inkling 2 reply/reasoning/tool parser (PR #4124) |
 | `0005`–`0009` | Kernel speedups: tiled loop mix, batched DSpark holds, FP8 draft head/layers, 2-warp NVFP4 expert split, certified lazy unembedding head, warp top-k, fused sliding prompt attention & multi-row projections (all exact) |
 | `0010`–`0012` | vLLM-compatible `reasoning_effort` & `reasoning` field; bf16 decode attention prefetch (`cp.async`); opt-in FP8 attention projections (`TF_INKLING2_ATTN_FP8=1`) |
-| `0013` | RTX PRO 6000 / Blackwell exact speedups: 4,096-row prompt chunks (`prompt_rows = 4096`) and a 64-entry CUDA Graph cache (`wide_graphs`) for drafted / multi-row verify rounds |
+| `0013` | Discrete Blackwell (`sm_120`, written on the RTX PRO 6000) exact speedups: 4,096-row prompt chunks (`prompt_rows = 4096`) and a 64-entry CUDA Graph cache (`wide_graphs`) for drafted / multi-row verify rounds |
 | `0014` | Blackwell native block-scaled tensor-core prefill experts (`sm_120a`/`sm_121a`, `TF_INKLING2_PREFILL_TC=1`): pre-quantizes prompt activations once per layer (`38 MiB` scratch) and runs `kind::mxf4nvf4` (layers 0–19) and `kind::mxf8f6f4` (20–23) directly over TensorFold's packed weights |
 | `0015` | Structured output (`response_format`, `guided_*`) and `tool_choice` (`required` / named function) on CUDA: grammar-masked greedy/sampled draws, vLLM-parity Inkling framing & tool-choice prompts, and `libtfgrammar.so` built from the patched tree with xgrammar v0.2.8 compile cache disabled |
 | `0016` | Native CUDA vision encoder (`inkling2_vision`, C6): `Inkling2ImageProcessor` (PNG/JPEG/WebP, 8×8 checkerboard alpha, `-1.0` padding to 40×40 tiles), 23-layer PE-Lang ViT with 2D pairwise axial RoPE, LayerScale, bilinear pos-embed interpolation, `vision_kernel<64, 8>` tensor-core attention, 2×2 spatial merge + GELU projector, and per-slot prompt embedding splicing (`--vision`) |

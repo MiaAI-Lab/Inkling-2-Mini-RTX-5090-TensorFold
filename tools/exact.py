@@ -75,9 +75,13 @@ def main() -> int:
     conc = [None] * len(prompts)
     errors = []
 
+    # the server rejects a request when every slot is busy, so send at most one a slot at a time
+    gate = threading.Semaphore(lanes if isinstance(lanes, int) and lanes > 0 else len(prompts))
+
     def worker(i):
         try:
-            conc[i] = ask(prompts[i], a.max_tokens)
+            with gate:
+                conc[i] = ask(prompts[i], a.max_tokens)
         except client.ApiError as exc:
             errors.append(str(exc))
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(len(prompts))]

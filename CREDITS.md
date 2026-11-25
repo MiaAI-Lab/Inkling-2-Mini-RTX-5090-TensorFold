@@ -46,7 +46,7 @@ This repository is a thin layer of scripts and engine patches. Its own work is l
 
 ## Recipe & Patches
 
-- **[MiaAI-Lab](https://github.com/MiaAI-Lab)** (Mia's AI Lab): this repository's scripts, RTX PRO 6000 (`sm_120`) port, [sparkDash](https://github.com/MiaAI-Lab/sparkDash/) benchmarks, full TensorFold serving support for `Inkling-2-Mini-Derisked` (whose upstream [deployment kit](https://huggingface.co/Blackfrost-AI/Inkling-2-Mini-Derisked/blob/main/deployment-kit/AGENT_INSTRUCTIONS.md) only targets vLLM: `RERISKED=1`, vLLM-parity `reasoning_effort` & `reasoning` field, SHA-256 verification, and readiness check), and the following engine patches created and built by MiaAI-Lab (all patches except `0004`, which is `ajensenwaud`'s PR #4124):
+- **[MiaAI-Lab](https://github.com/MiaAI-Lab)** (Mia's AI Lab): this repository's scripts, RTX PRO 6000 and RTX 5090 (`sm_120`) ports, [sparkDash](https://github.com/MiaAI-Lab/sparkDash/) benchmarks, full TensorFold serving support for `Inkling-2-Mini-Derisked` (whose upstream [deployment kit](https://huggingface.co/Blackfrost-AI/Inkling-2-Mini-Derisked/blob/main/deployment-kit/AGENT_INSTRUCTIONS.md) only targets vLLM: `RERISKED=1`, vLLM-parity `reasoning_effort` & `reasoning` field, SHA-256 verification, and readiness check), and the following engine patches created and built by MiaAI-Lab (all patches except `0004`, which is `ajensenwaud`'s PR #4124):
   - `0001-mini-verify-windows-rollback-taps.patch` — multi-row verify windows with exact conv rollback and drafter feature taps
   - `0002-mini-dspark-drafter.patch` — CUDA DSpark drafter (`mtp.safetensors`) with folded Markov head
   - `0003-mini-kv-cache-fp8.patch` — `--kv-cache fp8` (e4m3 K/V with per-position/head fp32 scales)

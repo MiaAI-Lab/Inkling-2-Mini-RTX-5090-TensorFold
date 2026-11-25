@@ -40,9 +40,10 @@ MODEL_MOUNT=/models/ink
 QUANT_LABEL="ModelOpt NVFP4 experts, MXFP8 layers 20-23, bf16 MTP"
 CKPT_GIB=20
 
-# GPU selection and CUDA architecture (RTX PRO 6000 Blackwell: sm_120, single GPU 0 by default).
+# GPU selection and CUDA architecture (GeForce RTX 5090: GB202, sm_120, 32 GiB GDDR7, single GPU 0 by default).
 GPU_ID="${GPU_ID:-0}"
 SM="${SM:-120}"
+GPU_LABEL="${GPU_LABEL:-RTX 5090}"
 # PTX ISA 9.2 native FP4/FP8 tensor-core decode (sm_120a+, nvcc 13.2+) and native host CPU tuning.
 NATIVE_FP_DECODE="${NATIVE_FP_DECODE:-1}"
 ZIG_CPU="${ZIG_CPU:-native}"
@@ -88,10 +89,11 @@ CONTAINER_NAME="${CONTAINER_NAME:-inkling2-mini-tf}"
 SERVED_NAME="${SERVED_NAME:-$MODEL_LABEL}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8888}"
+# 32 GiB leaves ~10 GiB after weights and scratch: 1 stream of 262,144 tokens at fp8 KV (~4.6 GiB) plus a few GiB of
+# prompt cache. Same budget, other shapes: PARALLEL=2 CONTEXT=131072, or PARALLEL=4 CONTEXT=65536. (The Derisked kit's
+# vLLM command leaves its KV cache at "auto", bf16: KV_DTYPE=bf16 PARALLEL=1 serves that; fp8 is this deployment's choice.)
 CONTEXT="${CONTEXT:-262144}"
-# 8 full windows at fp8 KV for both checkpoints. (The Derisked kit's vLLM command leaves its KV cache at "auto", bf16:
-# KV_DTYPE=bf16 PARALLEL=4 serves that; fp8 is this deployment's choice.)
-PARALLEL="${PARALLEL:-8}"
+PARALLEL="${PARALLEL:-1}"
 MAX_TOKENS="${MAX_TOKENS:-32768}"
 # DRAFTS=1 drafts with DRAFTER; 0 passes --no-drafts.
 DRAFTS="${DRAFTS:-1}"
@@ -108,10 +110,11 @@ DRAFTER_SHA256="${DRAFTER_SHA256:-217980ab00d116693fa5946df7bbfd967caf5fac1f529a
 DRAFTER_MOUNT=/models/draft
 DRAFTER_FETCH="${DRAFTER_FETCH:-1}"   # scripts/prepare.sh runs scripts/fetch.sh drafter when the folder is incomplete
 DFLASH2=0; [[ "$DRAFTS" == 1 && "$DRAFTER" == dflash2 ]] && DFLASH2=1
-# What loading takes of VRAM: the engine reported "model 22.82 GiB" with no drafter (2026-11-22, GB10). The DSpark
-# drafter adds its 0.6 GiB of weights, a 0.1 GiB folded head and its scratch; DFlash2 1.67 GiB (FP8 layers, an NVFP4
-# target head copy, the selector's codebooks and scratch; measured on GB10, 2026-11-24). PROVISIONAL.
-if [[ "$DFLASH2" == 1 ]]; then WEIGHTS_GIB="${WEIGHTS_GIB:-25}"; else WEIGHTS_GIB="${WEIGHTS_GIB:-24}"; fi
+# What loading takes of VRAM on a discrete sm_120 GPU: ~19.9 GiB on the RTX PRO 6000 with DFlash2 (17.60 GiB target,
+# 1.67 GiB DFlash2, 0.59 GiB vision, scratch); DSpark's 1.54 GiB is about the same. Rounded up to 21 GiB for the 5090's
+# start check. (GB10's unified memory reports more: "model 22.82 GiB" with no drafter.) PROVISIONAL: not yet measured
+# on a 5090.
+WEIGHTS_GIB="${WEIGHTS_GIB:-21}"
 drafts_label() { if [[ "$DRAFTS" != 1 ]]; then echo off; elif [[ "$DRAFTER" == dflash2 ]]; then echo DFlash2; else echo DSpark; fi; }
 # VISION=1 loads the checkpoint's inkling2_vision tower (--vision, ~0.6 GiB weights) for image_url / multimodal inputs.
 VISION="${VISION:-1}"
@@ -126,8 +129,9 @@ REASONING_EFFORT="${REASONING_EFFORT:-}"
 TEMPERATURE="${TEMPERATURE:-1.0}"
 TOP_P="${TOP_P:-1.0}"
 TOP_K="${TOP_K:-0}"
-# Discrete 96 GiB GPU (RTX PRO 6000 Blackwell): 4 GiB VRAM reserve leaves ~91.6 GiB for weights, KV and prompt cache.
-export TENSORFOLD_MEMORY_RESERVE_GIB="${TENSORFOLD_MEMORY_RESERVE_GIB:-4}"
+# Discrete 32 GiB GPU (RTX 5090, ~31.4 GiB usable headless): a 1 GiB VRAM reserve leaves ~30 GiB for weights, KV and
+# prompt cache. Raise it to 2-3 if the card also drives a desktop.
+export TENSORFOLD_MEMORY_RESERVE_GIB="${TENSORFOLD_MEMORY_RESERVE_GIB:-1}"
 
 # The target's attention caches: bf16 (exact, the default) or fp8 (`--kv-cache fp8`: e4m3 codes with a scale a position and
 # key head, about half the bytes; lossy, so a reply can differ from the bf16 one). The drafter's own caches stay bf16.
@@ -136,10 +140,11 @@ KV_DTYPE="${KV_DTYPE:-fp8}"
 # about +22% at one stream. Teacher-forced top-1 agreement with bf16 98.26% (fp8 KV alone 98.52%).
 # TF_INKLING2_ATTN_FP8=0 serves the exact bf16 projections.
 export TF_INKLING2_ATTN_FP8="${TF_INKLING2_ATTN_FP8:-1}"
-# RTX PRO 6000 Blackwell (188 SMs, 1792 GB/s) runtime tuning (all exact; override to 0/1 to ablate):
+# Discrete Blackwell runtime tuning, set on the RTX PRO 6000 (188 SMs, 1792 GB/s) and kept for the RTX 5090 (170 SMs,
+# the same 1792 GB/s); all exact, override to 0/1 to ablate:
 # - Disable GB10-calibrated verify/hold cost tables so multi-stream drafts stay active (+32–42% at 2–4 streams with
 #   DSpark; DFlash2's hold table is GB10's too, so its holds are priced free here as well).
-# - Split FP4 down-projection across 2 warps/unit to fill 188 SMs, enable Blackwell PDL, and uncap global attention z-blocks.
+# - Split FP4 down-projection across 2 warps/unit to fill the SMs, enable Blackwell PDL, and uncap global attention z-blocks.
 export TF_INKLING2_SHARED_COSTS="${TF_INKLING2_SHARED_COSTS:-0}"
 export TF_INKLING2_HOLD_COSTS="${TF_INKLING2_HOLD_COSTS:-0}"
 export TF_NVFP4_SPLIT_DOWN="${TF_NVFP4_SPLIT_DOWN:-1}"
@@ -157,18 +162,22 @@ if [[ "$RERISKED" == 1 ]]; then export TF_REASONING_FIELD="${TF_REASONING_FIELD:
 # states (~0.24 GiB together a stream). The engine reported 1.24 GiB a stream at 32,768 tokens, which this reproduces.
 # The DSpark head's global layer adds 4,096 bytes a token; DFlash2 a fixed 40 MiB ring a stream (5 layers' K and V over
 # its 2,048-position window), inside the rounding. PROVISIONAL.
-kv_gib() {
+# Counted in MiB and rounded once over all streams: on a 32 GiB card, rounding each stream up to a whole GiB would turn
+# away shapes that fit.
+kv_mib() {
   local ctx=${1:-$CONTEXT} per=32768
   [[ "$KV_DTYPE" == fp8 ]] && per=16896
   [[ "$ctx" =~ ^[0-9]+$ ]] || ctx=$CONTEXT
   [[ "$DRAFTS" == 1 && "$DRAFTER" == dspark ]] && per=$((per + 4096))
-  echo $(( (per * ctx + 268435456 + 1073741823) / 1073741824 ))
+  echo $(( (per * ctx + 1048575) / 1048576 + 256 ))
 }
-# GPU VRAM a start needs: weights, every stream's window, scratch slack and the VRAM reserve.
+# GPU VRAM a start needs: weights, every stream's window, scratch / prompt-cache slack and the VRAM reserve.
 mem_need_gib() {
-  local ctx=${1:-$CONTEXT}
-  echo $(( WEIGHTS_GIB + PARALLEL * $(kv_gib "$ctx") + 4 + MEM_FLOOR_GIB ))
+  local ctx=${1:-$CONTEXT} par=${2:-$PARALLEL}
+  [[ "$par" =~ ^[0-9]+$ ]] || par=$PARALLEL
+  echo $(( WEIGHTS_GIB + (par * $(kv_mib "$ctx") + 1023) / 1024 + MEM_SLACK_GIB + MEM_FLOOR_GIB ))
 }
+MEM_SLACK_GIB="${MEM_SLACK_GIB:-2}"
 MEM_NEED_GIB="${MEM_NEED_GIB:-}"
 MEM_FLOOR_GIB="${MEM_FLOOR_GIB:-$TENSORFOLD_MEMORY_RESERVE_GIB}"
 HOST_MEM_FLOOR_GIB="${HOST_MEM_FLOOR_GIB:-8}"
