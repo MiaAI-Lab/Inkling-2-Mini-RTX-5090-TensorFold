@@ -43,9 +43,19 @@ CKPT_GIB=20
 # GPU selection and CUDA architecture (GeForce RTX 5090: GB202, sm_120, 32 GiB GDDR7, single GPU 0 by default).
 GPU_ID="${GPU_ID:-0}"
 SM="${SM:-120}"
-GPU_LABEL="${GPU_LABEL:-RTX 5090}"
+[[ "$SM" =~ ^([0-9]+)[a-z]?$ ]] || { echo "SM must be a CUDA architecture number (e.g. 120, 89, 86), not $SM" >&2; exit 1; }
+_sm_num="${BASH_REMATCH[1]}"
+if [[ -z "${GPU_LABEL+set}" ]]; then
+  if [[ "$SM" == 120 ]]; then GPU_LABEL="RTX 5090"; else GPU_LABEL="CUDA sm_${SM}"; fi
+fi
 # PTX ISA 9.2 native FP4/FP8 tensor-core decode (sm_120a+, nvcc 13.2+) and native host CPU tuning.
-NATIVE_FP_DECODE="${NATIVE_FP_DECODE:-1}"
+_default_nfp=0; (( 10#$_sm_num >= 120 )) && _default_nfp=1
+NATIVE_FP_DECODE="${NATIVE_FP_DECODE:-$_default_nfp}"
+[[ "$NATIVE_FP_DECODE" =~ ^[01]$ ]] || { echo "NATIVE_FP_DECODE is 0 or 1, not $NATIVE_FP_DECODE" >&2; exit 1; }
+# Prompt chunk size baked into the engine (patch 0013 sets 4096 for 32 GiB+ GPUs; 512 trims ~2.5 GiB of scratch VRAM
+# on 24 GiB cards like the RTX 3090 / 4090 at the cost of slower BF16 prefill).
+PROMPT_ROWS="${PROMPT_ROWS:-4096}"
+[[ "$PROMPT_ROWS" =~ ^(512|1024|2048|4096)$ ]] || { echo "PROMPT_ROWS must be 512, 1024, 2048, or 4096, not $PROMPT_ROWS" >&2; exit 1; }
 ZIG_CPU="${ZIG_CPU:-native}"
 
 # The engine: TensorFold's Zig engine at Jürgen Schmied's Inkling 2 Mini CUDA head (TensorFold PR #4441, "C4"),
@@ -76,12 +86,13 @@ UBUNTU="${UBUNTU:-ubuntu24.04}"
 BUILD_BASE_IMAGE="${BUILD_BASE_IMAGE:-nvidia/cuda:${CUDA_VERSION}-devel-${UBUNTU}}"
 RUNTIME_BASE_IMAGE="${RUNTIME_BASE_IMAGE:-nvidia/cuda:${CUDA_VERSION}-runtime-${UBUNTU}}"
 TF_TAG="c4-${TF_REF:0:7}-sm${SM}"
+[[ "$PROMPT_ROWS" == 4096 ]] || TF_TAG="${TF_TAG}-pr${PROMPT_ROWS}"
 IMAGE="${IMAGE:-tensorfold-inkling2:${TF_TAG}}"
 image_hash() {
   ( cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
     cat patches/*.patch 2>/dev/null
     sed -n "/<<'DOCKERFILE'/,/^DOCKERFILE\$/p" scripts/prepare.sh
-    echo "$TF_REPO $TF_REF sm-$SM nfp-$NATIVE_FP_DECODE cpu-$ZIG_CPU zig-$ZIG_VERSION-$ZIG_ARCH-$ZIG_SHA256 $BUILD_BASE_IMAGE $RUNTIME_BASE_IMAGE xgrammar-$XGRAMMAR_TAG-$XGRAMMAR_REF"
+    echo "$TF_REPO $TF_REF sm-$SM nfp-$NATIVE_FP_DECODE pr-$PROMPT_ROWS cpu-$ZIG_CPU zig-$ZIG_VERSION-$ZIG_ARCH-$ZIG_SHA256 $BUILD_BASE_IMAGE $RUNTIME_BASE_IMAGE xgrammar-$XGRAMMAR_TAG-$XGRAMMAR_REF"
   ) | sha256sum | cut -c1-12
 }
 CONTAINER_NAME="${CONTAINER_NAME:-inkling2-mini-tf}"
@@ -144,18 +155,22 @@ export TF_INKLING2_ATTN_FP8="${TF_INKLING2_ATTN_FP8:-1}"
 # the same 1792 GB/s); all exact, override to 0/1 to ablate:
 # - Disable GB10-calibrated verify/hold cost tables so multi-stream drafts stay active (+32–42% at 2–4 streams with
 #   DSpark; DFlash2's hold table is GB10's too, so its holds are priced free here as well).
-# - Split FP4 down-projection across 2 warps/unit to fill the SMs, enable Blackwell PDL, and uncap global attention z-blocks.
+# - Split FP4 down-projection across 2 warps/unit to fill the SMs, enable PDL (sm_90+), and uncap global attention z-blocks.
 export TF_INKLING2_SHARED_COSTS="${TF_INKLING2_SHARED_COSTS:-0}"
 export TF_INKLING2_HOLD_COSTS="${TF_INKLING2_HOLD_COSTS:-0}"
 export TF_NVFP4_SPLIT_DOWN="${TF_NVFP4_SPLIT_DOWN:-1}"
-export TF_INKLING2_PDL="${TF_INKLING2_PDL:-1}"
+_default_pdl=0; (( 10#$_sm_num >= 90 )) && _default_pdl=1
+export TF_INKLING2_PDL="${TF_INKLING2_PDL:-$_default_pdl}"
 export TF_INKLING2_GLOBAL_ZCAP="${TF_INKLING2_GLOBAL_ZCAP:-0}"
-# Blackwell native FP4/MXFP8 block-scaled tensor cores for prefill experts (patch 0014):
+# Blackwell native FP4/MXFP8 block-scaled tensor cores for prefill experts (patch 0014; sm_120a/sm_121a only):
 # 1 = 2-term residual FP4 + MXFP8 (~8-bit activations, near-lossless); 2 = 1-term W4A4 + MXFP8; 0 = exact BF16 MMA.
-export TF_INKLING2_PREFILL_TC="${TF_INKLING2_PREFILL_TC:-1}"
-# FP8 tensor-core prompt attention projections (patch 0022; lossy, engine default off): prompt activations
-# quantized per-row to e4m3 for native FP8 MMA (decode stays BF16). TF_INKLING2_ATTN_FP8_TC=0 for exact BF16.
-export TF_INKLING2_ATTN_FP8_TC="${TF_INKLING2_ATTN_FP8_TC:-1}"
+_default_prefill_tc=0; (( 10#$_sm_num >= 120 )) && _default_prefill_tc=1
+export TF_INKLING2_PREFILL_TC="${TF_INKLING2_PREFILL_TC:-$_default_prefill_tc}"
+# FP8 tensor-core prompt attention projections (patch 0022; lossy, engine default off; requires sm_89+ mma_fp8):
+# prompt activations quantized per-row to e4m3 for native FP8 MMA (decode stays BF16). TF_INKLING2_ATTN_FP8_TC=0 for exact BF16.
+_default_attn_fp8_tc=0; (( 10#$_sm_num >= 89 )) && _default_attn_fp8_tc=1
+export TF_INKLING2_ATTN_FP8_TC="${TF_INKLING2_ATTN_FP8_TC:-$_default_attn_fp8_tc}"
+unset _sm_num _default_nfp _default_pdl _default_prefill_tc _default_attn_fp8_tc
 # The kit's vLLM serves reasoning in a `reasoning` field (its inkling reasoning parser); TensorFold names it
 # reasoning_content. For Derisked both are sent (TF_REASONING_FIELD: reasoning_content, reasoning or both).
 if [[ "$RERISKED" == 1 ]]; then export TF_REASONING_FIELD="${TF_REASONING_FIELD:-both}"; fi
@@ -175,10 +190,13 @@ kv_mib() {
   echo $(( (per * ctx + 1048575) / 1048576 + 256 ))
 }
 # GPU VRAM a start needs: weights, every stream's window, scratch / prompt-cache slack and the VRAM reserve.
+# Uses awk so fractional reserves like TENSORFOLD_MEMORY_RESERVE_GIB=0.5 (useful on 24 GiB GPUs) work cleanly.
 mem_need_gib() {
-  local ctx=${1:-$CONTEXT} par=${2:-$PARALLEL}
+  local ctx=${1:-$CONTEXT} par=${2:-$PARALLEL} kv
   [[ "$par" =~ ^[0-9]+$ ]] || par=$PARALLEL
-  echo $(( WEIGHTS_GIB + (par * $(kv_mib "$ctx") + 1023) / 1024 + MEM_SLACK_GIB + MEM_FLOOR_GIB ))
+  kv=$(( par * $(kv_mib "$ctx") ))
+  awk -v w="$WEIGHTS_GIB" -v kv="$kv" -v sl="$MEM_SLACK_GIB" -v fl="$MEM_FLOOR_GIB" \
+    'BEGIN { mib = (w + sl + fl) * 1024 + kv; n = int(mib / 1024); if (mib > n * 1024 + 1e-6) n++; printf "%d\n", n }'
 }
 MEM_SLACK_GIB="${MEM_SLACK_GIB:-2}"
 MEM_NEED_GIB="${MEM_NEED_GIB:-}"

@@ -39,6 +39,19 @@ Not measured on an RTX 5090 yet. Until then, the single-stream reference from th
 
 *(Earlier 300 W DSpark baseline on RTX PRO 6000: Prose **150.7 tok/s** · 23 ms TTFT, Code **231.1 tok/s** · 53 ms TTFT.)*
 
+### Community results — RTX 3090 (24 GiB, `sm_86`, 350 W)
+
+Tested natively on a single GeForce RTX 3090 (CUDA 13.4, Zig 0.17.0, `VISION=0`, `KV_DTYPE=fp8`, `TENSORFOLD_MEMORY_RESERVE_GIB=0.5`) with patches `0001`–`0028`. On `sm_86` there are no FP4/FP8 tensor cores, so `NATIVE_FP_DECODE`, `TF_INKLING2_PREFILL_TC`, `TF_INKLING2_ATTN_FP8_TC`, and `TF_INKLING2_PDL` default to `0`. Setting `PROMPT_ROWS=512` trims ~2.5 GiB of scratch VRAM compared to the default `4096`-row build, unlocking `TF_INKLING2_ATTN_FP8=1`, 64k single-stream context, and 4×16k multi-stream serving inside 24 GiB:
+
+| Config (`sm_86`, 24 GiB) | Context | VRAM | Prose (1×) | Code (1×) | No-draft (1×) | Prefill 4k / 16k |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `PROMPT_ROWS=512` · DFlash2 · `ATTN_FP8=1` | 1×64k | 22.7 GiB | **73.4 tok/s** | **87.6 tok/s** | 61.4 tok/s | 3,531 / 3,497 tok/s |
+| `PROMPT_ROWS=512` · DSpark · `ATTN_FP8=1` | 1×32k | 21.9 GiB | 68.1 tok/s | 74.6 tok/s | 62.0 tok/s | 3,503 / — tok/s |
+| `PROMPT_ROWS=4096` · DFlash2 · `ATTN_FP8=0` | 1×32k | 23.3 GiB | 63.0 tok/s | — | 56.5 tok/s | **4,705 / 4,567 tok/s** |
+
+- **Multi-stream (`PROMPT_ROWS=512`, `4×16k`, DFlash2, `ATTN_FP8=1`, 23.2 GiB VRAM):** 1 stream **66.7 tok/s** wall (`116 ms` TTFT) → 2 streams **97.3 tok/s** wall (`114 ms` TTFT) → 4 streams **142.9 tok/s** wall / **150.0 tok/s** sum (`209 ms` TTFT, 2.1× scaling).
+- **Checks on `sm_86`:** `tools/exact.py` **PASS** (bit-for-bit token & text SHA match: 299 drafts accepted on 512-row, 140 on 4096-row) and OpenAI function calling via `libtfgrammar.so` **PASS**.
+
 ## Checks
 
 Not yet run on an RTX 5090. The same patch stack passed every check on the RTX PRO 6000 (`sm_120`) and on a DGX Spark (`0018`, DFlash2). Run them after the first start:
@@ -50,7 +63,7 @@ Not yet run on an RTX 5090. The same patch stack passed every check on the RTX P
 
 ## Requirements
 
-- An **NVIDIA GeForce RTX 5090** (32 GiB VRAM, `sm_120`, x86_64 Linux) with current NVIDIA drivers (CUDA 13+). A dedicated (headless) card is best: a desktop on the same GPU takes VRAM, so raise `TENSORFOLD_MEMORY_RESERVE_GIB` or shorten `CONTEXT`. Other Blackwell GPUs (`sm_120`/`sm_121`) work by adjusting `SM`, `PARALLEL`, `CONTEXT`, and `TENSORFOLD_MEMORY_RESERVE_GIB`.
+- An **NVIDIA GeForce RTX 5090** (32 GiB VRAM, `sm_120`, x86_64 Linux) with current NVIDIA drivers (CUDA 13+). A dedicated (headless) card is best: a desktop on the same GPU takes VRAM, so raise `TENSORFOLD_MEMORY_RESERVE_GIB` or shorten `CONTEXT`. Other NVIDIA GPUs work by setting `SM` (e.g. `121` for GB10, `89` for RTX 4090, `86` for RTX 3090), `PARALLEL`, `CONTEXT`, and `TENSORFOLD_MEMORY_RESERVE_GIB`; Blackwell/Hopper/Ada-only flags auto-disable for lower `SM` targets, and `PROMPT_ROWS=512` trims ~2.5 GiB of scratch VRAM for 24 GiB cards.
 - Docker with the NVIDIA Container Toolkit, and your user in the `docker` group.
 - ~15 GB free under Docker's root for the slim CUDA image, plus ~20 GB for the model checkpoint.
 
@@ -105,8 +118,9 @@ All defaults live in [`scripts/config.sh`](scripts/config.sh). Override via envi
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `GPU_ID` | `0` | single GPU index passed to `--gpus device=$GPU_ID` |
-| `SM` | `120` | CUDA SASS target (`120` for RTX 5090 / RTX PRO 6000 Blackwell; `121` for GB10) |
-| `GPU_LABEL` | `RTX 5090` | GPU name shown in the start banner |
+| `SM` | `120` | CUDA SASS target (`120` for RTX 5090 / RTX PRO 6000 Blackwell; `121` for GB10; `89` for Ada; `86` for Ampere) |
+| `GPU_LABEL` | `RTX 5090` (or `CUDA sm_$SM`) | GPU name shown in the start banner |
+| `PROMPT_ROWS` | `4096` | build-time prompt chunk rows (`512`, `1024`, `2048`, or `4096`); `512` saves ~2.5 GiB of scratch VRAM on 24 GiB GPUs |
 | `RERISKED` | `0` | `0`: upstream `Inkling-2-Mini` (auto-fetched); `1`: local `Inkling-2-Mini-Derisked` |
 | `MODEL_DIR` | `$HOME/models/hf/Inkling-2-Mini` | checkpoint folder mounted read-only at `/models/ink` |
 | `PARALLEL` | `1` | concurrent request slots (each gets a full `CONTEXT` window) |
@@ -124,8 +138,16 @@ All defaults live in [`scripts/config.sh`](scripts/config.sh). Override via envi
 | `TENSORFOLD_MEMORY_RESERVE_GIB` | `1` | VRAM kept free when sizing the KV / prompt-cache pool (raise it if the GPU also drives a display) |
 | `MEM_SLACK_GIB` | `2` | extra VRAM `./start.sh` requires beyond weights, windows and the reserve |
 | `TF_INKLING2_ATTN_FP8` | `1` | FP8 attention projections (`0` for exact bf16) |
-| `TF_INKLING2_PREFILL_TC` | `1` | Blackwell native FP4/MXFP8 prefill tensor cores (`0` for exact bf16 MMA) |
-| `TF_INKLING2_ATTN_FP8_TC` | `1` | FP8 tensor-core prompt attention projections (`0` for exact bf16 activations; decode stays bf16) |
+| `TF_INKLING2_PREFILL_TC` | `1` (`sm_120+`) / `0` | Blackwell native FP4/MXFP8 prefill tensor cores (`0` for exact bf16 MMA) |
+| `TF_INKLING2_ATTN_FP8_TC` | `1` (`sm_89+`) / `0` | FP8 tensor-core prompt attention projections (`0` for exact bf16 activations; decode stays bf16) |
+
+Example for a headless 24 GiB RTX 3090 (`sm_86`, 64k context or `PARALLEL=4 CONTEXT=16384`):
+
+```bash
+SM=86 GPU_LABEL="RTX 3090" PROMPT_ROWS=512 \
+  CONTEXT=65536 VISION=0 TENSORFOLD_MEMORY_RESERVE_GIB=0.5 MEM_SLACK_GIB=0 \
+  ./start.sh
+```
 
 ### API notes
 
