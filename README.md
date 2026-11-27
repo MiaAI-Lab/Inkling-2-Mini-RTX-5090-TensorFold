@@ -20,6 +20,17 @@ Serve **[Inkling 2 Mini](https://huggingface.co/thinkingmachines/Inkling-2-Mini)
 
 Not measured on an RTX 5090 yet. Until then, the single-stream reference from the [RTX PRO 6000 recipe](https://github.com/MiaAI-Lab/Inkling-2-Mini-RTX-PRO-6000-TensorFold#performance): same engine and patches, `sm_120`, the same 1,792 GB/s memory bandwidth, and 188 SMs to the 5090's 170, so the 5090 should land close.
 
+### Prefill — RTX PRO 6000 reference (300 W vs 600 W · `TF_INKLING2_ATTN_FP8_TC=1`)
+
+| Context | 300 W tok/s | 300 W TTFT | 600 W tok/s | 600 W TTFT |
+| --- | ---: | ---: | ---: | ---: |
+| 4k | **14,987.4 tok/s** | 325 ms | **25,137.3 tok/s** | 214 ms |
+| 8k | **13,751.4 tok/s** | 647 ms | **22,466.3 tok/s** | 416 ms |
+| 16k | **13,082.8 tok/s** | 1.30 s | **21,399.3 tok/s** | 817 ms |
+| 32k | **12,356.0 tok/s** | 2.70 s | **20,353.2 tok/s** | 1.66 s |
+| 64k | **11,035.5 tok/s** | 5.99 s | **18,354.6 tok/s** | 3.62 s |
+| 128k | **9,133.2 tok/s** | 14.40 s | **15,197.5 tok/s** | 8.68 s |
+
 ### Decode — 1 stream, RTX PRO 6000 reference (300 W · `temp 0.7` · thinking on · `top_k 20` · DSpark drafts)
 
 | Streams | Prose | Prose TTFT | Code | Code TTFT |
