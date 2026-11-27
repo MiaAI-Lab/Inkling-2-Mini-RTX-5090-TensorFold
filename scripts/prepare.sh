@@ -58,7 +58,7 @@ have=$(free_gb "$DOCKER_ROOT"); have=${have:-0}
 log "Disk: ${have} GB free under Docker's root"
 
 if [[ $REBUILD -eq 1 || "$built_hash" != "$PATCHES_HASH" ]]; then
-  log "Building $IMAGE (TensorFold ${TF_REF:0:12} from $TF_REPO, Zig $ZIG_VERSION ($ZIG_ARCH), sm_$SM, patches $PATCHES_HASH)"
+  log "Building $IMAGE (TensorFold ${TF_REF:0:12} from $TF_REPO, Zig $ZIG_VERSION ($ZIG_ARCH), sm_$SM, prompt_rows $PROMPT_ROWS, patches $PATCHES_HASH)"
   ctx=$(mktemp -d "$STATE_DIR/build.XXXXXX")
   trap 'rm -rf -- "$ctx"' EXIT
   mkdir -p "$ctx/patches"
@@ -69,7 +69,7 @@ if [[ $REBUILD -eq 1 || "$built_hash" != "$PATCHES_HASH" ]]; then
     --build-arg BUILD_BASE_IMAGE="$BUILD_BASE_IMAGE" \
     --build-arg RUNTIME_BASE_IMAGE="$RUNTIME_BASE_IMAGE" \
     --build-arg TF_REPO="$TF_REPO" --build-arg TF_REF="$TF_REF" \
-    --build-arg SM="$SM" --build-arg NATIVE_FP_DECODE="$NATIVE_FP_DECODE" --build-arg ZIG_CPU="$ZIG_CPU" \
+    --build-arg SM="$SM" --build-arg NATIVE_FP_DECODE="$NATIVE_FP_DECODE" --build-arg PROMPT_ROWS="$PROMPT_ROWS" --build-arg ZIG_CPU="$ZIG_CPU" \
     --build-arg ZIG_VERSION="$ZIG_VERSION" --build-arg ZIG_ARCH="$ZIG_ARCH" --build-arg ZIG_SHA256="$ZIG_SHA256" \
     --build-arg XGRAMMAR_REPO="$XGRAMMAR_REPO" --build-arg XGRAMMAR_TAG="$XGRAMMAR_TAG" --build-arg XGRAMMAR_REF="$XGRAMMAR_REF" \
     --build-arg PATCHES_HASH="$PATCHES_HASH" \
@@ -121,7 +121,14 @@ RUN cd /tensorfold && \
     for p in /opt/tf-patches/*.patch; do [ -e "$p" ] || continue; echo "applying $p"; git apply --check "$p" && git apply "$p" || exit 1; done
 ARG SM=120
 ARG NATIVE_FP_DECODE=1
+ARG PROMPT_ROWS=4096
 ARG ZIG_CPU=native
+RUN if [ "${PROMPT_ROWS}" != "4096" ]; then \
+      sed -i "s/^const prompt_rows_max = 4096;/const prompt_rows_max = ${PROMPT_ROWS};/" /tensorfold/zig/src/families/inkling2/kernels.zig && \
+      sed -i "s/^pub const prompt_rows = 4096;/pub const prompt_rows = ${PROMPT_ROWS};/" /tensorfold/zig/src/families/inkling2/mini_model.zig && \
+      grep -q "^const prompt_rows_max = ${PROMPT_ROWS};" /tensorfold/zig/src/families/inkling2/kernels.zig && \
+      grep -q "^pub const prompt_rows = ${PROMPT_ROWS};" /tensorfold/zig/src/families/inkling2/mini_model.zig; \
+    fi
 # fatbins + native only: the kernels are embedded in tensorfold-native, and nothing here serves images or video
 RUN --mount=type=cache,id=tensorfold-zig-global,target=/root/.cache/zig \
     cd /tensorfold && \
@@ -158,7 +165,8 @@ RUN ln -s /opt/tensorfold/native/bin/tensorfold-native /usr/local/bin/tensorfold
     tensorfold-native --version
 ARG PATCHES_HASH
 ARG SM=120
-LABEL tf.patches=${PATCHES_HASH} tf.kernels=embedded tf.sm=${SM}
+ARG PROMPT_ROWS=4096
+LABEL tf.patches=${PATCHES_HASH} tf.kernels=embedded tf.sm=${SM} tf.prompt_rows=${PROMPT_ROWS}
 ENV CUDA_CACHE_PATH=/cache/nv
 WORKDIR /workspace
 DOCKERFILE
