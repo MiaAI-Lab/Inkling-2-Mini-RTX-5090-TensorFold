@@ -31,13 +31,13 @@ Not measured on an RTX 5090 yet. Until then, the single-stream reference from th
 | 64k | **11,035.5 tok/s** | 5.99 s | **18,354.6 tok/s** | 3.62 s |
 | 128k | **9,133.2 tok/s** | 14.40 s | **15,197.5 tok/s** | 8.68 s |
 
-### Decode — 1 stream, RTX PRO 6000 reference (300 W · `temp 0.7` · thinking on · `top_k 20` · DSpark drafts)
+### Decode — 1 stream, RTX PRO 6000 reference (`temp 0.7` · thinking on · `top_k 20` · DFlash2 drafts)
 
-| Streams | Prose | Prose TTFT | Code | Code TTFT |
-| --- | ---: | ---: | ---: | ---: |
-| ×1 | **150.7 tok/s** | 23 ms | **231.1 tok/s** | 53 ms |
+| Streams | Prose | Prose TTFT |
+| --- | ---: | ---: |
+| ×1 | **230.1 tok/s** | 22 ms |
 
-> **DFlash2** (this recipe's default drafter) hasn't been benchmarked on either card. On a DGX Spark, with only the drafter changed, it decoded 13–37% faster than DSpark at one stream.
+*(Earlier 300 W DSpark baseline on RTX PRO 6000: Prose **150.7 tok/s** · 23 ms TTFT, Code **231.1 tok/s** · 53 ms TTFT.)*
 
 ## Checks
 
